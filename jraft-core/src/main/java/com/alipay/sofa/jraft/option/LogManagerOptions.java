@@ -17,7 +17,9 @@
 package com.alipay.sofa.jraft.option;
 
 import com.alipay.sofa.jraft.FSMCaller;
+import com.alipay.sofa.jraft.Node;
 import com.alipay.sofa.jraft.conf.ConfigurationManager;
+import com.alipay.sofa.jraft.core.NodeImpl;
 import com.alipay.sofa.jraft.core.NodeMetrics;
 import com.alipay.sofa.jraft.entity.codec.LogEntryCodecFactory;
 import com.alipay.sofa.jraft.entity.codec.v2.LogEntryV2CodecFactory;
@@ -31,7 +33,7 @@ import com.alipay.sofa.jraft.storage.LogStorage;
  * 2018-Mar-13 5:15:15 PM
  */
 public class LogManagerOptions {
-
+    private String               groupId;
     private LogStorage           logStorage;
     private ConfigurationManager configurationManager;
     private FSMCaller            fsmCaller;
@@ -39,6 +41,15 @@ public class LogManagerOptions {
     private RaftOptions          raftOptions;
     private NodeMetrics          nodeMetrics;
     private LogEntryCodecFactory logEntryCodecFactory = LogEntryV2CodecFactory.getInstance();
+    private NodeImpl node;
+
+    public String getGroupId() {
+        return groupId;
+    }
+
+    public void setGroupId(String groupId) {
+        this.groupId = groupId;
+    }
 
     public LogEntryCodecFactory getLogEntryCodecFactory() {
         return this.logEntryCodecFactory;
@@ -96,4 +107,11 @@ public class LogManagerOptions {
         this.fsmCaller = fsmCaller;
     }
 
+    public NodeImpl getNode() {
+        return node;
+    }
+
+    public void setNode(NodeImpl node) {
+        this.node = node;
+    }
 }

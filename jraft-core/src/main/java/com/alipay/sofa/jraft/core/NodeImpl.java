@@ -24,16 +24,15 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.stream.Collectors;
 
+import com.alipay.sofa.jraft.util.*;
+import com.alipay.sofa.jraft.util.concurrent.DefaultFixedThreadsExecutorGroupFactory;
+import com.alipay.sofa.jraft.util.concurrent.FixedThreadsExecutorGroup;
 import org.apache.commons.lang.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -103,22 +102,6 @@ import com.alipay.sofa.jraft.storage.RaftMetaStorage;
 import com.alipay.sofa.jraft.storage.SnapshotExecutor;
 import com.alipay.sofa.jraft.storage.impl.LogManagerImpl;
 import com.alipay.sofa.jraft.storage.snapshot.SnapshotExecutorImpl;
-import com.alipay.sofa.jraft.util.Describer;
-import com.alipay.sofa.jraft.util.DisruptorBuilder;
-import com.alipay.sofa.jraft.util.DisruptorMetricSet;
-import com.alipay.sofa.jraft.util.JRaftServiceLoader;
-import com.alipay.sofa.jraft.util.JRaftSignalHandler;
-import com.alipay.sofa.jraft.util.LogExceptionHandler;
-import com.alipay.sofa.jraft.util.NamedThreadFactory;
-import com.alipay.sofa.jraft.util.OnlyForTest;
-import com.alipay.sofa.jraft.util.Platform;
-import com.alipay.sofa.jraft.util.RepeatedTimer;
-import com.alipay.sofa.jraft.util.Requires;
-import com.alipay.sofa.jraft.util.RpcFactoryHelper;
-import com.alipay.sofa.jraft.util.SignalHelper;
-import com.alipay.sofa.jraft.util.SystemPropertyUtil;
-import com.alipay.sofa.jraft.util.ThreadId;
-import com.alipay.sofa.jraft.util.Utils;
 import com.alipay.sofa.jraft.util.concurrent.LongHeldDetectingReadWriteLock;
 import com.alipay.sofa.jraft.util.timer.RaftTimerFactory;
 import com.google.protobuf.Message;
@@ -223,6 +206,8 @@ public class NodeImpl implements Node, RaftServerService {
     private volatile int                                                   targetPriority;
     /** The number of elections time out for current node */
     private volatile int                                                   electionTimeoutCounter;
+    private static volatile FixedThreadsExecutorGroup                      appendEntriesExecutors;
+    private static final Object                                            INIT_LOCK                = new Object();
 
     private static class NodeReadWriteLock extends LongHeldDetectingReadWriteLock {
 
@@ -363,13 +348,15 @@ public class NodeImpl implements Node, RaftServerService {
         void start(final Configuration oldConf, final Configuration newConf, final Closure done) {
             if (isBusy()) {
                 if (done != null) {
-                    Utils.runClosureInThread(done, new Status(RaftError.EBUSY, "Already in busy stage."));
+                    ThreadPoolGroup.runClosureInThread(node.getGroupId(), done, new Status(RaftError.EBUSY,
+                        "Already in busy stage."));
                 }
                 throw new IllegalStateException("Busy stage");
             }
             if (this.done != null) {
                 if (done != null) {
-                    Utils.runClosureInThread(done, new Status(RaftError.EINVAL, "Already have done closure."));
+                    ThreadPoolGroup.runClosureInThread(node.getGroupId(), done, new Status(RaftError.EINVAL,
+                        "Already have done closure."));
                 }
                 throw new IllegalArgumentException("Already have done closure");
             }
@@ -403,8 +390,8 @@ public class NodeImpl implements Node, RaftServerService {
                 }
                 final OnCaughtUp caughtUp = new OnCaughtUp(this.node, this.node.currTerm, newPeer, this.version);
                 final long dueTime = Utils.nowMs() + this.node.options.getElectionTimeoutMs();
-                if (!this.node.replicatorGroup.waitCaughtUp(newPeer, this.node.options.getCatchupMargin(), dueTime,
-                    caughtUp)) {
+                if (!this.node.replicatorGroup.waitCaughtUp(this.node.getGroupId(), newPeer,
+                    this.node.options.getCatchupMargin(), dueTime, caughtUp)) {
                     LOG.error("Node {} waitCaughtUp, peer={}.", this.node.getNodeId(), newPeer);
                     onCaughtUp(this.version, newPeer, false);
                     return;
@@ -463,8 +450,8 @@ public class NodeImpl implements Node, RaftServerService {
             this.stage = Stage.STAGE_NONE;
             this.nchanges = 0;
             if (this.done != null) {
-                Utils.runClosureInThread(this.done, st != null ? st : new Status(RaftError.EPERM,
-                    "Leader stepped down."));
+                ThreadPoolGroup.runClosureInThread(node.getGroupId(), this.done, st != null ? st : new Status(
+                    RaftError.EPERM, "Leader stepped down."));
                 this.done = null;
             }
         }
@@ -577,6 +564,7 @@ public class NodeImpl implements Node, RaftServerService {
         this.logStorage = this.serviceFactory.createLogStorage(this.options.getLogUri(), this.raftOptions);
         this.logManager = new LogManagerImpl();
         final LogManagerOptions opts = new LogManagerOptions();
+        opts.setGroupId(this.groupId);
         opts.setLogEntryCodecFactory(this.serviceFactory.createLogEntryCodecFactory());
         opts.setLogStorage(this.logStorage);
         opts.setConfigurationManager(this.configManager);
@@ -610,7 +598,7 @@ public class NodeImpl implements Node, RaftServerService {
             this.writeLock.unlock();
         }
         // do_snapshot in another thread to avoid blocking the timer thread.
-        Utils.runInThread(() -> doSnapshot(null, false));
+        ThreadPoolGroup.runInThread(this.groupId, () -> doSnapshot(null, false));
     }
 
     private void handleElectionTimeout() {
@@ -754,7 +742,7 @@ public class NodeImpl implements Node, RaftServerService {
             LOG.error("Fail to init fsm caller, null instance, bootstrapId={}.", bootstrapId);
             return false;
         }
-        this.closureQueue = new ClosureQueueImpl();
+        this.closureQueue = new ClosureQueueImpl(this.groupId);
         final FSMCallerOptions opts = new FSMCallerOptions();
         opts.setAfterShutdown(status -> afterShutdown());
         opts.setLogManager(this.logManager);
@@ -884,6 +872,19 @@ public class NodeImpl implements Node, RaftServerService {
         return ThreadLocalRandom.current().nextInt(timeoutMs, timeoutMs + this.raftOptions.getMaxElectionDelayMs());
     }
 
+    private FixedThreadsExecutorGroup getDefaultThreadPoolForSendMsg() {
+        if (appendEntriesExecutors == null) {
+            synchronized (INIT_LOCK) {
+                if (appendEntriesExecutors == null) {
+                    appendEntriesExecutors = DefaultFixedThreadsExecutorGroupFactory.INSTANCE.newExecutorGroup(
+                        Utils.APPEND_ENTRIES_THREADS_SEND, "Append-Entries-Thread-Send",
+                        Utils.MAX_APPEND_ENTRIES_TASKS_PER_THREAD, true);
+                }
+            }
+        }
+        return appendEntriesExecutors;
+    }
+
     @Override
     public boolean init(final NodeOptions opts) {
         Requires.requireNonNull(opts, "Null node options");
@@ -905,6 +906,13 @@ public class NodeImpl implements Node, RaftServerService {
             LOG.error("No RPC server attached to, did you forget to call addService?");
             return false;
         }
+
+        if (this.options.getAppendEntriesExecutors() == null) {
+            this.options.setAppendEntriesExecutors(getDefaultThreadPoolForSendMsg());
+        }
+
+        ThreadPoolGroup.registerThreadPool(this.metrics.getMetricRegistry(), this.groupId,
+            this.options.getClosureExecutor());
 
         this.timerManager = TIMER_FACTORY.getRaftScheduler(this.options.isSharedTimerPool(),
             this.options.getTimerPoolSize(), "JRaft-Node-ScheduleThreadPool");
@@ -1365,7 +1373,7 @@ public class NodeImpl implements Node, RaftServerService {
                 LOG.debug("Node {} can't apply, status={}.", getNodeId(), st);
                 final List<Closure> dones = tasks.stream().map(ele -> ele.done)
                         .filter(Objects::nonNull).collect(Collectors.toList());
-                Utils.runInThread(() -> {
+                ThreadPoolGroup.runInThread(this.groupId, () -> {
                     for (final Closure done : dones) {
                         done.run(st);
                     }
@@ -1381,14 +1389,14 @@ public class NodeImpl implements Node, RaftServerService {
                     if (task.done != null) {
                         final Status st = new Status(RaftError.EPERM, "expected_term=%d doesn't match current_term=%d",
                             task.expectedTerm, this.currTerm);
-                        Utils.runClosureInThread(task.done, st);
+                        ThreadPoolGroup.runClosureInThread(this.groupId, task.done, st);
                         task.reset();
                     }
                     continue;
                 }
                 if (!this.ballotBox.appendPendingTask(this.conf.getConf(),
                     this.conf.isStable() ? null : this.conf.getOldConf(), task.done)) {
-                    Utils.runClosureInThread(task.done, new Status(RaftError.EINTERNAL, "Fail to append task."));
+                    ThreadPoolGroup.runClosureInThread(this.groupId, task.done, new Status(RaftError.EINTERNAL, "Fail to append task."));
                     task.reset();
                     continue;
                 }
@@ -1428,7 +1436,8 @@ public class NodeImpl implements Node, RaftServerService {
     @Override
     public void readIndex(final byte[] requestContext, final ReadIndexClosure done) {
         if (this.shutdownLatch != null) {
-            Utils.runClosureInThread(done, new Status(RaftError.ENODESHUTDOWN, "Node is shutting down."));
+            ThreadPoolGroup.runClosureInThread(this.groupId, done, new Status(RaftError.ENODESHUTDOWN,
+                "Node is shutting down."));
             throw new IllegalStateException("Node is shutting down");
         }
         Requires.requireNonNull(done, "Null closure");
@@ -1603,7 +1612,7 @@ public class NodeImpl implements Node, RaftServerService {
     @Override
     public void apply(final Task task) {
         if (this.shutdownLatch != null) {
-            Utils.runClosureInThread(task.getDone(), new Status(RaftError.ENODESHUTDOWN, "Node is shutting down."));
+            ThreadPoolGroup.runClosureInThread(this.groupId, task.getDone(), new Status(RaftError.ENODESHUTDOWN, "Node is shutting down."));
             throw new IllegalStateException("Node is shutting down");
         }
         Requires.requireNonNull(task, "Null task");
@@ -1626,7 +1635,7 @@ public class NodeImpl implements Node, RaftServerService {
           default:
             if (!this.applyQueue.tryPublishEvent(translator)) {
               String errorMsg = "Node is busy, has too many tasks, queue is full and bufferSize="+ this.applyQueue.getBufferSize();
-              Utils.runClosureInThread(task.getDone(),
+                ThreadPoolGroup.runClosureInThread(this.groupId, task.getDone(),
                   new Status(RaftError.EBUSY, errorMsg));
               LOG.warn("Node {} applyQueue is overload.", getNodeId());
               this.metrics.recordTimes("apply-task-overload-times", 1);
@@ -2176,7 +2185,8 @@ public class NodeImpl implements Node, RaftServerService {
                 LOG.debug("Node {} waits peer {} to catch up.", getNodeId(), peer);
                 final OnCaughtUp caughtUp = new OnCaughtUp(this, term, peer, version);
                 final long dueTime = Utils.nowMs() + this.options.getElectionTimeoutMs();
-                if (this.replicatorGroup.waitCaughtUp(peer, this.options.getCatchupMargin(), dueTime, caughtUp)) {
+                if (this.replicatorGroup.waitCaughtUp(this.groupId, peer, this.options.getCatchupMargin(), dueTime,
+                    caughtUp)) {
                     return;
                 }
                 LOG.warn("Node {} waitCaughtUp failed, peer={}.", getNodeId(), peer);
@@ -2344,7 +2354,8 @@ public class NodeImpl implements Node, RaftServerService {
         final ConfigurationChangeDone configurationChangeDone = new ConfigurationChangeDone(this.currTerm, leaderStart);
         // Use the new_conf to deal the quorum of this very log
         if (!this.ballotBox.appendPendingTask(newConf, oldConf, configurationChangeDone)) {
-            Utils.runClosureInThread(configurationChangeDone, new Status(RaftError.EINTERNAL, "Fail to append task."));
+            ThreadPoolGroup.runClosureInThread(this.groupId, configurationChangeDone, new Status(RaftError.EINTERNAL,
+                "Fail to append task."));
             return;
         }
         final List<LogEntry> entries = new ArrayList<>();
@@ -2369,7 +2380,7 @@ public class NodeImpl implements Node, RaftServerService {
                 } else {
                     status.setError(RaftError.EPERM, "Not leader");
                 }
-                Utils.runClosureInThread(done, status);
+                ThreadPoolGroup.runClosureInThread(this.groupId, done, status);
             }
             return;
         }
@@ -2377,13 +2388,14 @@ public class NodeImpl implements Node, RaftServerService {
         if (this.confCtx.isBusy()) {
             LOG.warn("Node {} refused configuration concurrent changing.", getNodeId());
             if (done != null) {
-                Utils.runClosureInThread(done, new Status(RaftError.EBUSY, "Doing another configuration change."));
+                ThreadPoolGroup.runClosureInThread(this.groupId, done, new Status(RaftError.EBUSY,
+                    "Doing another configuration change."));
             }
             return;
         }
         // Return immediately when the new peers equals to current configuration
         if (this.conf.getConf().equals(newConf)) {
-            Utils.runClosureInThread(done, Status.OK());
+            ThreadPoolGroup.runClosureInThread(this.groupId, done, Status.OK());
             return;
         }
         this.confCtx.start(oldConf, newConf, done);
@@ -2405,7 +2417,7 @@ public class NodeImpl implements Node, RaftServerService {
         }
         if (savedDoneList != null) {
             for (final Closure closure : savedDoneList) {
-                Utils.runClosureInThread(closure);
+                ThreadPoolGroup.runClosureInThread(this.groupId, closure);
             }
         }
     }
@@ -2787,7 +2799,7 @@ public class NodeImpl implements Node, RaftServerService {
                 if (this.applyQueue != null) {
                     final CountDownLatch latch = new CountDownLatch(1);
                     this.shutdownLatch = latch;
-                    Utils.runInThread(
+                    ThreadPoolGroup.runInThread(this.groupId,
                         () -> this.applyQueue.publishEvent((event, sequence) -> event.shutdownLatch = latch));
                 } else {
                     final int num = GLOBAL_NUM_NODES.decrementAndGet();
@@ -2814,7 +2826,7 @@ public class NodeImpl implements Node, RaftServerService {
             }
             // Call join() asynchronously
             final Closure shutdownHook = done;
-            Utils.runInThread(() -> {
+            ThreadPoolGroup.runInThread(this.groupId, () -> {
               try {
                 join();
               } catch (InterruptedException e) {
@@ -3148,7 +3160,7 @@ public class NodeImpl implements Node, RaftServerService {
         } else {
             if (done != null) {
                 final Status status = new Status(RaftError.EINVAL, "Snapshot is not supported");
-                Utils.runClosureInThread(done, status);
+                ThreadPoolGroup.runClosureInThread(this.groupId, done, status);
             }
         }
     }
