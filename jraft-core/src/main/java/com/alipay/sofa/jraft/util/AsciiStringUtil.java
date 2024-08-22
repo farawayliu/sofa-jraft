@@ -37,7 +37,7 @@ public final class AsciiStringUtil {
         for (int i = 0; i < len; i++) {
             out[i] = (char) (in[i + offset] & 0xFF);
         }
-        return UnsafeUtil.moveToString(out);
+        return new String(out);
     }
 
     public static String unsafeDecode(final byte[] in) {
@@ -50,7 +50,7 @@ public final class AsciiStringUtil {
         for (int i = 0; i < len; i++) {
             out[i] = (char) (in.byteAt(i) & 0xFF);
         }
-        return UnsafeUtil.moveToString(out);
+        return new String(out);
     }
 
     private AsciiStringUtil() {
