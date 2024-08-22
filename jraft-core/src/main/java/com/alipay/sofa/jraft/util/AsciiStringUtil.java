@@ -16,7 +16,6 @@
  */
 package com.alipay.sofa.jraft.util;
 
-import com.alipay.sofa.jraft.util.internal.UnsafeUtil;
 import com.google.protobuf.ByteString;
 
 /**

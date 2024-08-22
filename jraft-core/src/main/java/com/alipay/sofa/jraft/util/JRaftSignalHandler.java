@@ -23,5 +23,5 @@ package com.alipay.sofa.jraft.util;
 @FunctionalInterface
 public interface JRaftSignalHandler {
 
-    void handle(final String signalName);
+    void handle();
 }

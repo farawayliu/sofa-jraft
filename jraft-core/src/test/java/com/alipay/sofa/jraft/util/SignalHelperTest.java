@@ -31,11 +31,9 @@ public class SignalHelperTest {
         // kill -s USR2 pid
 
         final List<JRaftSignalHandler> handlers = new ArrayList<>();
-        handlers.add((signalName) -> System.out.println("signal test: " + signalName));
+        handlers.add(() -> System.out.println("signal test "));
 
-        if (SignalHelper.supportSignal()) {
-            SignalHelper.addSignal(SignalHelper.SIG_USR2, handlers);
-        }
+        SignalHelper.addSignal(handlers);
 
         Thread.sleep(300000);
     }

@@ -43,7 +43,7 @@ public class NodeDescribeSignalHandler extends FileOutputSignalHandler {
     private static final String BASE_NAME = "node_describe.log";
 
     @Override
-    public void handle(final String signalName) {
+    public void handle() {
         final List<Node> nodes = NodeManager.getInstance().getAllNodes();
         if (nodes.isEmpty()) {
             return;
@@ -52,7 +52,7 @@ public class NodeDescribeSignalHandler extends FileOutputSignalHandler {
         try {
             final File file = getOutputFile(DIR, BASE_NAME);
 
-            LOG.info("Describing raft nodes with signal: {} to file: {}.", signalName, file);
+            LOG.info("Describing raft nodes with shutdown to file: {}.", file);
 
             try (final PrintWriter out = new PrintWriter(new OutputStreamWriter(new FileOutputStream(file, true),
                 StandardCharsets.UTF_8))) {

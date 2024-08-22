@@ -41,11 +41,11 @@ public class RheaKVMetricsSignalHandler extends FileOutputSignalHandler {
     private static final String BASE_NAME = "rheakv_metrics.log";
 
     @Override
-    public void handle(final String signalName) {
+    public void handle() {
         try {
             final File file = getOutputFile(DIR, BASE_NAME);
 
-            LOG.info("Printing rheakv metrics with signal: {} to file: {}.", signalName, file);
+            LOG.info("Printing rheakv metrics with shutdown to file: {}.", file);
 
             try (final PrintStream out = new PrintStream(new FileOutputStream(file, true))) {
                 final MetricReporter reporter = MetricReporter.forRegistry(KVMetrics.metricRegistry()) //

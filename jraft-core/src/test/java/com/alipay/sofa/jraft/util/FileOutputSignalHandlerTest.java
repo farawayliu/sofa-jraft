@@ -56,7 +56,7 @@ public class FileOutputSignalHandlerTest {
     private File getOutputFile(final String path, final String baseName) throws IOException {
         return new FileOutputSignalHandler() {
             @Override
-            public void handle(String signalName) {
+            public void handle() {
             }
         }.getOutputFile(path, baseName);
     }

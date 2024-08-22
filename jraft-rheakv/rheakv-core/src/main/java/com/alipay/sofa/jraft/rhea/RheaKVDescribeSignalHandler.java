@@ -43,7 +43,7 @@ public class RheaKVDescribeSignalHandler extends FileOutputSignalHandler {
     private static final String BASE_NAME = "rheakv_describe.log";
 
     @Override
-    public void handle(final String signalName) {
+    public void handle() {
         final List<Describer> describers = DescriberManager.getInstance().getAllDescribers();
         if (describers.isEmpty()) {
             return;
@@ -52,7 +52,7 @@ public class RheaKVDescribeSignalHandler extends FileOutputSignalHandler {
         try {
             final File file = getOutputFile(DIR, BASE_NAME);
 
-            LOG.info("Describing rheakv with signal: {} to file: {}.", signalName, file);
+            LOG.info("Describing rheakv with shutdown to file: {}.", file);
 
             try (final PrintWriter out = new PrintWriter(new OutputStreamWriter(new FileOutputStream(file, true),
                 StandardCharsets.UTF_8))) {

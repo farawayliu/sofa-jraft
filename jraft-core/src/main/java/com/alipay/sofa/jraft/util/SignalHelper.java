@@ -16,99 +16,42 @@
  */
 package com.alipay.sofa.jraft.util;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- *
  * @author jiachun.fjc
  */
 public final class SignalHelper {
 
-    private static final Logger         LOG             = LoggerFactory.getLogger(SignalHelper.class);
+    private static final Logger LOG = LoggerFactory.getLogger(SignalHelper.class);
+    private static final List<JRaftSignalHandler> handlers = new ArrayList<>();
 
-    private static final SignalAccessor SIGNAL_ACCESSOR = getSignalAccessor0();
-
-    public static final String          SIG_USR2        = "USR2";
-
-    public static boolean supportSignal() {
-        return SIGNAL_ACCESSOR != null;
+    static {
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            LOG.info("Handling shutdown signal.");
+            for (final JRaftSignalHandler h : SignalHelper.handlers) {
+                try {
+                    h.handle();
+                } catch (Exception e) {
+                    LOG.error("Fail to handle shutdown signal: {}.", h.getClass().getSimpleName());
+                }
+            }
+        }));
     }
 
     /**
      * Registers user signal handlers.
      *
-     * @param signalName a signal name
-     * @param handlers   user signal handlers
-     * @return true if support on current platform
+     * @param handlers user signal handlers
      */
-    public static boolean addSignal(final String signalName, final List<JRaftSignalHandler> handlers) {
-        if (SIGNAL_ACCESSOR != null) {
-            SIGNAL_ACCESSOR.addSignal(signalName, handlers);
-            return true;
-        }
-        return false;
-    }
-
-    private static SignalAccessor getSignalAccessor0() {
-        return hasSignal0() ? new SignalAccessor() : null;
-    }
-
-    private static boolean hasSignal0() {
-        try {
-            Class.forName("sun.misc.Signal");
-            return true;
-        } catch (final Throwable t) {
-            if (LOG.isWarnEnabled()) {
-                LOG.warn("sun.misc.Signal: unavailable.", t);
-            }
-        }
-        return false;
+    public static void addSignal(final List<JRaftSignalHandler> handlers) {
+        SignalHelper.handlers.addAll(handlers);
     }
 
     private SignalHelper() {
-    }
-
-    static class SignalAccessor {
-
-        public void addSignal(final String signalName, final List<JRaftSignalHandler> handlers) {
-            final sun.misc.Signal signal = new sun.misc.Signal(signalName);
-            final SignalHandlerAdapter adapter = new SignalHandlerAdapter(signal, handlers);
-            sun.misc.Signal.handle(signal, adapter);
-        }
-    }
-
-    static class SignalHandlerAdapter implements sun.misc.SignalHandler {
-
-        private final sun.misc.Signal          target;
-        private final List<JRaftSignalHandler> handlers;
-
-        public static void addSignal(final SignalHandlerAdapter adapter) {
-            sun.misc.Signal.handle(adapter.target, adapter);
-        }
-
-        public SignalHandlerAdapter(sun.misc.Signal target, List<JRaftSignalHandler> handlers) {
-            this.target = target;
-            this.handlers = handlers;
-        }
-
-        @Override
-        public void handle(final sun.misc.Signal signal) {
-            try {
-                if (!this.target.equals(signal)) {
-                    return;
-                }
-
-                LOG.info("Handling signal {}.", signal);
-
-                for (final JRaftSignalHandler h : this.handlers) {
-                    h.handle(signal.getName());
-                }
-            } catch (final Throwable t) {
-                LOG.error("Fail to handle signal: {}.", signal, t);
-            }
-        }
     }
 }

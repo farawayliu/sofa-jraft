@@ -145,14 +145,9 @@ public class NodeImpl implements Node, RaftServerService {
 
     static {
         try {
-            if (SignalHelper.supportSignal()) {
-                // TODO support windows signal
-                if (!Platform.isWindows()) {
-                    final List<JRaftSignalHandler> handlers = JRaftServiceLoader.load(JRaftSignalHandler.class) //
-                        .sort();
-                    SignalHelper.addSignal(SignalHelper.SIG_USR2, handlers);
-                }
-            }
+            final List<JRaftSignalHandler> handlers = JRaftServiceLoader.load(JRaftSignalHandler.class) //
+                .sort();
+            SignalHelper.addSignal(handlers);
         } catch (final Throwable t) {
             LOG.error("Fail to add signal.", t);
         }

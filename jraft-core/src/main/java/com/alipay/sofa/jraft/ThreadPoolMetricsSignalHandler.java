@@ -41,11 +41,11 @@ public class ThreadPoolMetricsSignalHandler extends FileOutputSignalHandler {
     private static final String BASE_NAME = "thread_pool_metrics.log";
 
     @Override
-    public void handle(final String signalName) {
+    public void handle() {
         try {
             final File file = getOutputFile(DIR, BASE_NAME);
 
-            LOG.info("Printing thread pools metrics with signal: {} to file: {}.", signalName, file);
+            LOG.info("Printing thread pools metrics with shutdown to file: {}.", file);
 
             try (final PrintStream out = new PrintStream(new FileOutputStream(file, true))) {
                 MetricReporter.forRegistry(ThreadPoolMetricRegistry.metricRegistry()) //
